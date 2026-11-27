@@ -1,4 +1,4 @@
-"""FastAPI backend for Render deployment, sharing core logic with recommender.py."""
+"""FastAPI backend for Render deployment, sharing core logic with recommender.py and agent/."""
 
 from __future__ import annotations
 
@@ -7,20 +7,33 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
+from agent.agent import MovieAgent
+from agent.llm import LLMError, OpenAICompatibleLLMClient
+from agent.memory import ConversationMemoryStore
+from agent.schemas import ChatRequest, ChatResponse
+from agent.tools import MovieToolset
 from recommender import (
     MovieMetadata,
     MovieRecommender,
     fetch_movie_metadata,
 )
 
+limiter = Limiter(key_func=get_remote_address)
+CHAT_RATE_LIMIT = os.getenv("CHAT_RATE_LIMIT", "20/minute")
+
 app = FastAPI(
     title="Movie Recommender API",
-    version="1.1.0",
-    description="Content-based movie recommendation API across 4,800 movies.",
+    version="1.2.0",
+    description="Content-based movie recommendation and conversational agent API across 4,800 movies.",
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 raw_origins = os.getenv("ALLOWED_ORIGINS", "*").strip()
 allowed_origins = (
@@ -33,7 +46,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "OPTIONS"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -42,6 +55,18 @@ app.add_middleware(
 def get_recommender() -> MovieRecommender:
     """Load the compact recommender artifacts once per process."""
     return MovieRecommender()
+
+
+@lru_cache(maxsize=1)
+def get_memory_store() -> ConversationMemoryStore:
+    """Initialize SQLAlchemy session/message/preference tables once per process."""
+    return ConversationMemoryStore()
+
+
+@lru_cache(maxsize=1)
+def get_llm_client() -> OpenAICompatibleLLMClient:
+    """Create the OpenAI-compatible LLM client from environment settings."""
+    return OpenAICompatibleLLMClient()
 
 
 @lru_cache(maxsize=4096)
@@ -149,4 +174,58 @@ def recommend_movies(
     return {
         "movie": _enrich_movie(source_movie, meta_by_id[movie_id]),
         "recommendations": [_enrich_movie(r, meta_by_id[int(r["movie_id"])]) for r in recs],
+    }
+
+
+@app.post("/chat", response_model=ChatResponse)
+@limiter.limit(CHAT_RATE_LIMIT)
+def chat(
+    request: Request,
+    payload: ChatRequest,
+    rec: MovieRecommender = Depends(get_recommender),
+    memory: ConversationMemoryStore = Depends(get_memory_store),
+    llm_client: OpenAICompatibleLLMClient = Depends(get_llm_client),
+) -> ChatResponse:
+    """Conversational movie discovery endpoint backed by tool calling and persistent memory."""
+    session_id = memory.ensure_session(payload.session_id)
+    history = memory.get_recent_messages(session_id, limit=10)
+    preferences = memory.get_preferences(session_id)
+
+    agent = MovieAgent(llm_client=llm_client, toolset=MovieToolset(rec))
+    try:
+        run_result = agent.run(
+            user_message=payload.message,
+            history=history,
+            preferences=preferences,
+        )
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    memory.append_message(session_id, "user", payload.message)
+    memory.append_message(session_id, "assistant", run_result.reply.message)
+    updated_prefs = memory.extract_and_update_preferences(
+        session_id=session_id,
+        user_message=payload.message,
+        llm_client=llm_client,
+    )
+
+    return ChatResponse(
+        session_id=session_id,
+        reply=run_result.reply,
+        trace=run_result.trace,
+        preferences=updated_prefs,
+    )
+
+
+@app.get("/chat/{session_id}/preferences")
+def get_chat_preferences(
+    session_id: str,
+    memory: ConversationMemoryStore = Depends(get_memory_store),
+) -> dict[str, Any]:
+    """Return stored user preferences for a conversation session."""
+    if not memory.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    return {
+        "session_id": session_id,
+        "preferences": memory.get_preferences(session_id),
     }

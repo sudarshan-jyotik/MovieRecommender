@@ -11,9 +11,11 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Environment secrets
+# Environment secrets & local databases
 .env
 .streamlit/secrets.toml
+*.db
+*.sqlite*
 
 # Large raw pickle files (use compact data/ artifacts in git)
 similarity.pkl
