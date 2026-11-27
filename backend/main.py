@@ -13,12 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from recommender import (
     MovieMetadata,
     MovieRecommender,
-    fetch_tmdb_metadata,
+    fetch_movie_metadata,
 )
 
 app = FastAPI(
     title="Movie Recommender API",
-    version="1.0.0",
+    version="1.1.0",
     description="Content-based movie recommendation API across 4,800 movies.",
 )
 
@@ -45,10 +45,17 @@ def get_recommender() -> MovieRecommender:
 
 
 @lru_cache(maxsize=4096)
-def _cached_tmdb_lookup(movie_id: int, api_key: str) -> MovieMetadata:
+def _cached_metadata_lookup(movie_id: int, tmdb_key: str, omdb_key: str) -> MovieMetadata:
     rec = get_recommender()
     fallback = rec.get_movie(movie_id)
-    return fetch_tmdb_metadata(movie_id=movie_id, api_key=api_key, fallback=fallback)
+    return fetch_movie_metadata(
+        movie_id=movie_id,
+        title=str(fallback.get("title") or ""),
+        release_year=str(fallback.get("release_year") or ""),
+        tmdb_api_key=tmdb_key,
+        omdb_api_key=omdb_key,
+        fallback=fallback,
+    )
 
 
 def _enrich_movie(movie: dict[str, Any], meta: MovieMetadata) -> dict[str, Any]:
@@ -70,15 +77,20 @@ def _enrich_movie(movie: dict[str, Any], meta: MovieMetadata) -> dict[str, Any]:
 
 
 def _fetch_metadata_batch(movie_ids: list[int]) -> dict[int, MovieMetadata]:
-    api_key = os.getenv("TMDB_API_KEY", "").strip()
-    if not api_key:
+    tmdb_key = os.getenv("TMDB_API_KEY", "").strip()
+    omdb_key = os.getenv("OMDB_API_KEY", "").strip()
+    if not tmdb_key and not omdb_key:
         rec = get_recommender()
         return {
-            mid: fetch_tmdb_metadata(movie_id=mid, api_key="", fallback=rec.get_movie(mid))
+            mid: fetch_movie_metadata(
+                movie_id=mid, tmdb_api_key="", omdb_api_key="", fallback=rec.get_movie(mid)
+            )
             for mid in movie_ids
         }
     with ThreadPoolExecutor(max_workers=min(8, max(1, len(movie_ids)))) as pool:
-        results = list(pool.map(lambda mid: _cached_tmdb_lookup(mid, api_key), movie_ids))
+        results = list(
+            pool.map(lambda mid: _cached_metadata_lookup(mid, tmdb_key, omdb_key), movie_ids)
+        )
     return {meta.movie_id: meta for meta in results}
 
 
@@ -89,6 +101,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "movies_count": len(rec.movies),
+        "omdb_configured": bool(os.getenv("OMDB_API_KEY", "").strip()),
         "tmdb_configured": bool(os.getenv("TMDB_API_KEY", "").strip()),
     }
 
@@ -137,4 +150,3 @@ def recommend_movies(
         "movie": _enrich_movie(source_movie, meta_by_id[movie_id]),
         "recommendations": [_enrich_movie(r, meta_by_id[int(r["movie_id"])]) for r in recs],
     }
-

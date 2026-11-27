@@ -14,6 +14,8 @@ from backend.main import app as fastapi_app
 from recommender import (
     MovieRecommender,
     build_placeholder_poster,
+    fetch_movie_metadata,
+    fetch_omdb_metadata,
     fetch_tmdb_metadata,
 )
 
@@ -100,6 +102,42 @@ class TestMovieRecommender(unittest.TestCase):
         uri = build_placeholder_poster("Test <Movie> & Co")
         self.assertTrue(uri.startswith("data:image/svg+xml;utf8,"))
         self.assertNotIn("<Movie>", uri)
+
+    def test_omdb_poster_and_tmdb_timeout_fallback_to_omdb(self) -> None:
+        session = MagicMock(spec=requests.Session)
+        omdb_resp = MagicMock()
+        omdb_resp.status_code = 200
+        omdb_resp.json.return_value = {
+            "Response": "True",
+            "Poster": "https://m.media-amazon.com/images/avatar.jpg",
+            "Year": "2009",
+            "imdbRating": "7.9",
+            "Plot": "A marine on Pandora.",
+            "imdbID": "tt0499549",
+        }
+        session.get.side_effect = [
+            requests.ConnectTimeout("TMDB timed out"),
+            omdb_resp,
+        ]
+        meta = fetch_movie_metadata(
+            movie_id=19995,
+            title="Avatar",
+            release_year="2009",
+            tmdb_api_key="tmdb-key",
+            omdb_api_key="omdb-key",
+            session=session,
+        )
+        self.assertEqual(meta.poster_url, "https://m.media-amazon.com/images/avatar.jpg")
+        self.assertEqual(meta.rating, 7.9)
+        self.assertEqual(meta.tmdb_url, "https://www.imdb.com/title/tt0499549/")
+
+        na_session = MagicMock(spec=requests.Session)
+        na_resp = MagicMock()
+        na_resp.status_code = 200
+        na_resp.json.return_value = {"Response": "True", "Poster": "N/A"}
+        na_session.get.return_value = na_resp
+        meta_na = fetch_omdb_metadata(19995, "Avatar", "2009", api_key="omdb-key", session=na_session)
+        self.assertIsNone(meta_na.poster_url)
 
     def test_fastapi_endpoints(self) -> None:
         health = self.client.get("/health")

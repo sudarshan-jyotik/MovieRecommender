@@ -9,8 +9,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
+      - key: OMDB_API_KEY
+        sync: false
       - key: TMDB_API_KEY
         sync: false
       - key: ALLOWED_ORIGINS
         value: "*"
-

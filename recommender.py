@@ -1,4 +1,4 @@
-"""Core movie recommendation engine and resilient TMDB metadata client."""
+"""Core movie recommendation engine and resilient TMDB/OMDb metadata clients."""
 
 from __future__ import annotations
 
@@ -20,13 +20,14 @@ DEFAULT_MOVIES_PATH = DATA_DIR / "movies_clean.json.gz"
 DEFAULT_SIMILARITY_PATH = DATA_DIR / "similarity_topk.npz"
 TMDB_API_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
+OMDB_API_BASE = "https://www.omdbapi.com/"
 
 _HTTP_SESSION = requests.Session()
 
 
 @dataclass(frozen=True)
 class MovieMetadata:
-    """Metadata fetched from TMDB merged with offline dataset defaults."""
+    """Metadata fetched from TMDB/OMDb merged with offline dataset defaults."""
 
     movie_id: int
     poster_url: str | None = None
@@ -40,7 +41,7 @@ class MovieMetadata:
 
 
 def build_placeholder_poster(title: str) -> str:
-    """Return an inline SVG data URI poster when TMDB is unavailable."""
+    """Return an inline SVG data URI poster when no external poster is available."""
     safe_title = html.escape(title[:48])
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="500" height="750" viewBox="0 0 500 750">'
@@ -58,6 +59,20 @@ def build_placeholder_poster(title: str) -> str:
     return "data:image/svg+xml;utf8," + urllib.parse.quote(svg)
 
 
+def _fallback_metadata(movie_id: int, fallback: dict[str, Any] | None) -> MovieMetadata:
+    fb = fallback or {}
+    return MovieMetadata(
+        movie_id=movie_id,
+        release_year=str(fb.get("release_year") or ""),
+        rating=fb.get("rating"),
+        runtime=fb.get("runtime"),
+        genres=tuple(str(g) for g in (fb.get("genres") or [])),
+        tagline=str(fb.get("tagline") or ""),
+        overview=str(fb.get("overview") or ""),
+        tmdb_url=f"https://www.themoviedb.org/movie/{movie_id}",
+    )
+
+
 def fetch_tmdb_metadata(
     movie_id: int,
     api_key: str | None = None,
@@ -66,27 +81,10 @@ def fetch_tmdb_metadata(
     fallback: dict[str, Any] | None = None,
 ) -> MovieMetadata:
     """Fetch movie poster and details from TMDB without raising on network/API errors."""
-    tmdb_url = f"https://www.themoviedb.org/movie/{movie_id}"
-    fb = fallback or {}
-    fb_year = str(fb.get("release_year") or "")
-    fb_rating = fb.get("rating")
-    fb_runtime = fb.get("runtime")
-    fb_genres = tuple(str(g) for g in (fb.get("genres") or []))
-    fb_tagline = str(fb.get("tagline") or "")
-    fb_overview = str(fb.get("overview") or "")
-
-    key = (api_key or os.getenv("TMDB_API_KEY") or "").strip()
+    base = _fallback_metadata(movie_id, fallback)
+    key = (api_key if api_key is not None else os.getenv("TMDB_API_KEY", "")).strip()
     if not key:
-        return MovieMetadata(
-            movie_id=movie_id,
-            release_year=fb_year,
-            rating=fb_rating,
-            runtime=fb_runtime,
-            genres=fb_genres,
-            tagline=fb_tagline,
-            overview=fb_overview,
-            tmdb_url=tmdb_url,
-        )
+        return base
 
     http = session or _HTTP_SESSION
     url = f"{TMDB_API_BASE}/movie/{movie_id}"
@@ -102,44 +100,26 @@ def fetch_tmdb_metadata(
     try:
         response = http.get(url, params=params, headers=headers, timeout=timeout)
         if response.status_code != 200:
-            return MovieMetadata(
-                movie_id=movie_id,
-                release_year=fb_year,
-                rating=fb_rating,
-                runtime=fb_runtime,
-                genres=fb_genres,
-                tagline=fb_tagline,
-                overview=fb_overview,
-                tmdb_url=tmdb_url,
-            )
+            return base
         data: dict[str, Any] = response.json()
     except (requests.RequestException, ValueError):
-        return MovieMetadata(
-            movie_id=movie_id,
-            release_year=fb_year,
-            rating=fb_rating,
-            runtime=fb_runtime,
-            genres=fb_genres,
-            tagline=fb_tagline,
-            overview=fb_overview,
-            tmdb_url=tmdb_url,
-        )
+        return base
 
     poster_path = data.get("poster_path")
     poster_url = f"{TMDB_IMAGE_BASE}{poster_path}" if poster_path else None
     release_date = str(data.get("release_date") or "")
-    release_year = release_date[:4] if len(release_date) >= 4 else fb_year
+    release_year = release_date[:4] if len(release_date) >= 4 else base.release_year
     vote_avg = data.get("vote_average")
-    rating = round(float(vote_avg), 1) if isinstance(vote_avg, (int, float)) and vote_avg > 0 else fb_rating
-    overview = str(data.get("overview") or "").strip() or fb_overview
-    tagline = str(data.get("tagline") or "").strip() or fb_tagline
+    rating = round(float(vote_avg), 1) if isinstance(vote_avg, (int, float)) and vote_avg > 0 else base.rating
+    overview = str(data.get("overview") or "").strip() or base.overview
+    tagline = str(data.get("tagline") or "").strip() or base.tagline
     runtime_val = data.get("runtime")
-    runtime = int(runtime_val) if isinstance(runtime_val, (int, float)) and runtime_val > 0 else fb_runtime
+    runtime = int(runtime_val) if isinstance(runtime_val, (int, float)) and runtime_val > 0 else base.runtime
     genres_raw = data.get("genres")
     genres = (
         tuple(str(g["name"]) for g in genres_raw if isinstance(g, dict) and "name" in g)
         if isinstance(genres_raw, list) and genres_raw
-        else fb_genres
+        else base.genres
     )
 
     return MovieMetadata(
@@ -151,8 +131,120 @@ def fetch_tmdb_metadata(
         genres=genres,
         tagline=tagline,
         overview=overview,
-        tmdb_url=tmdb_url,
+        tmdb_url=base.tmdb_url,
     )
+
+
+def fetch_omdb_metadata(
+    movie_id: int,
+    title: str,
+    release_year: str = "",
+    api_key: str | None = None,
+    timeout: float = 4.0,
+    session: requests.Session | None = None,
+    fallback: dict[str, Any] | None = None,
+) -> MovieMetadata:
+    """Fetch movie poster and details from OMDb without raising on network/API errors."""
+    base = _fallback_metadata(movie_id, fallback)
+    key = (api_key if api_key is not None else os.getenv("OMDB_API_KEY", "")).strip()
+    if not key or not title.strip():
+        return base
+
+    http = session or _HTTP_SESSION
+
+    def _query(with_year: bool) -> dict[str, Any] | None:
+        params: dict[str, str] = {"t": title.strip(), "type": "movie", "apikey": key}
+        if with_year and release_year:
+            params["y"] = release_year
+        try:
+            resp = http.get(OMDB_API_BASE, params=params, timeout=timeout)
+            if resp.status_code != 200:
+                return None
+            payload = resp.json()
+            if isinstance(payload, dict) and payload.get("Response") == "True":
+                return payload
+        except (requests.RequestException, ValueError):
+            return None
+        return None
+
+    data = _query(with_year=True)
+    if data is None and release_year:
+        data = _query(with_year=False)
+    if data is None:
+        return base
+
+    raw_poster = str(data.get("Poster") or "").strip()
+    poster_url = raw_poster if raw_poster.startswith("http") else None
+    raw_year = str(data.get("Year") or "").strip()[:4]
+    year = raw_year if raw_year.isdigit() else base.release_year
+
+    rating = base.rating
+    try:
+        imdb_rating = float(data.get("imdbRating", ""))
+        if imdb_rating > 0:
+            rating = round(imdb_rating, 1)
+    except (TypeError, ValueError):
+        pass
+
+    plot = str(data.get("Plot") or "").strip()
+    overview = plot if plot and plot != "N/A" else base.overview
+
+    imdb_id = str(data.get("imdbID") or "").strip()
+    info_url = f"https://www.imdb.com/title/{imdb_id}/" if imdb_id else base.tmdb_url
+
+    return MovieMetadata(
+        movie_id=movie_id,
+        poster_url=poster_url,
+        release_year=year,
+        rating=rating,
+        runtime=base.runtime,
+        genres=base.genres,
+        tagline=base.tagline,
+        overview=overview,
+        tmdb_url=info_url,
+    )
+
+
+def fetch_movie_metadata(
+    movie_id: int,
+    title: str = "",
+    release_year: str = "",
+    tmdb_api_key: str | None = None,
+    omdb_api_key: str | None = None,
+    timeout: float = 4.0,
+    session: requests.Session | None = None,
+    fallback: dict[str, Any] | None = None,
+) -> MovieMetadata:
+    """Resolve metadata using OMDb and/or TMDB, with automatic fallback."""
+    omdb_key = (omdb_api_key if omdb_api_key is not None else os.getenv("OMDB_API_KEY", "")).strip()
+    tmdb_key = (tmdb_api_key if tmdb_api_key is not None else os.getenv("TMDB_API_KEY", "")).strip()
+
+    # Try TMDB if configured; fall back to OMDb if TMDB yields no poster (or is blocked)
+    if tmdb_key:
+        tmdb_meta = fetch_tmdb_metadata(
+            movie_id=movie_id,
+            api_key=tmdb_key,
+            timeout=timeout,
+            session=session,
+            fallback=fallback,
+        )
+        if tmdb_meta.poster_url or not omdb_key:
+            return tmdb_meta
+
+    if omdb_key:
+        effective_title = title or str((fallback or {}).get("title") or "")
+        effective_year = release_year or str((fallback or {}).get("release_year") or "")
+        return fetch_omdb_metadata(
+            movie_id=movie_id,
+            title=effective_title,
+            release_year=effective_year,
+            api_key=omdb_key,
+            timeout=timeout,
+            session=session,
+            fallback=fallback,
+        )
+
+    return _fallback_metadata(movie_id, fallback)
 
 
 class MovieRecommender:
@@ -203,7 +295,7 @@ class MovieRecommender:
         title = str(movie["title"])
         if title in self._dup_titles:
             year = movie.get("release_year") or f"TMDB #{movie_id}"
-            return f"{title} ({year})" if year != f"TMDB #{movie_id}" else f"{title} ({year})"
+            return f"{title} ({year})"
         return title
 
     def list_movies(self, query: str = "", limit: int | None = None) -> list[dict[str, Any]]:
