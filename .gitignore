@@ -1,2 +1,22 @@
-*.pkl
-.ipynb_checkpoints/
+# Python & virtual environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE & OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Environment secrets
+.env
+.streamlit/secrets.toml
+
+# Large raw pickle files (use compact data/ artifacts in git)
+similarity.pkl
+movies.pkl
+movie_dict.pkl
+

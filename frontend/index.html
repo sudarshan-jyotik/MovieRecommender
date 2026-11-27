@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CineMatch — Movie Recommender</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-glow"></div>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand">
+        <span class="brand-icon">🎬</span>
+        <div>
+          <h1>CineMatch</h1>
+          <p class="subtitle">Content-based discovery across 4,800 films</p>
+        </div>
+      </div>
+      <div class="api-status" id="apiStatus" title="Backend connection status">
+        <span class="status-dot"></span>
+        <span id="apiStatusText">Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="search-panel">
+      <div class="search-row">
+        <div class="search-box">
+          <label for="movieSearch" class="sr-only">Search for a movie</label>
+          <input
+            id="movieSearch"
+            type="search"
+            placeholder="Search 4,800 movies by title or genre (e.g. Inception, Batman, Sci-Fi)…"
+            autocomplete="off"
+          />
+          <ul id="searchDropdown" class="dropdown hidden" role="listbox"></ul>
+        </div>
+
+        <div class="controls">
+          <label class="count-label" for="limitSelect">Results</label>
+          <select id="limitSelect">
+            <option value="5">Top 5</option>
+            <option value="10" selected>Top 10</option>
+            <option value="15">Top 15</option>
+          </select>
+          <button id="recommendBtn" class="btn-primary" type="button">Recommend</button>
+        </div>
+      </div>
+
+      <div class="quick-picks">
+        <span class="quick-label">Try:</span>
+        <button class="chip" data-movie-id="19995" type="button">Avatar</button>
+        <button class="chip" data-movie-id="27205" type="button">Inception</button>
+        <button class="chip" data-movie-id="155" type="button">The Dark Knight</button>
+        <button class="chip" data-movie-id="157336" type="button">Interstellar</button>
+        <button class="chip" data-movie-id="862" type="button">Toy Story</button>
+      </div>
+    </section>
+
+    <div id="alertBanner" class="alert hidden"></div>
+
+    <section id="selectedSection" class="selected-card hidden"></section>
+
+    <section id="resultsSection" class="results-section hidden">
+      <div class="results-header">
+        <h2 id="resultsHeading">Recommended Movies</h2>
+        <span id="resultsMeta" class="results-meta"></span>
+      </div>
+      <div id="resultsGrid" class="movie-grid"></div>
+    </section>
+  </main>
+
+  <footer class="site-footer container">
+    <p>Powered by content-based cosine similarity &amp; TMDB metadata.</p>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
+
