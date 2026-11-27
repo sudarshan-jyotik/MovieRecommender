@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import requests
 from fastapi.testclient import TestClient
@@ -157,29 +157,31 @@ class TestMovieRecommender(unittest.TestCase):
                 os.environ.pop("TEST_MOVIE_ENV_B", None)
 
     def test_fastapi_endpoints(self) -> None:
-        health = self.client.get("/health")
-        self.assertEqual(health.status_code, 200)
-        self.assertEqual(health.json()["movies_count"], 4800)
+        with patch.dict(os.environ, {"OMDB_API_KEY": "", "TMDB_API_KEY": ""}):
+            health = self.client.get("/health")
+            self.assertEqual(health.status_code, 200)
+            self.assertEqual(health.json()["movies_count"], 4800)
 
-        search = self.client.get("/movies", params={"q": "Avatar", "limit": 5})
-        self.assertEqual(search.status_code, 200)
-        self.assertTrue(any(m["movie_id"] == 19995 for m in search.json()["movies"]))
+            search = self.client.get("/movies", params={"q": "Avatar", "limit": 5})
+            self.assertEqual(search.status_code, 200)
+            self.assertTrue(any(m["movie_id"] == 19995 for m in search.json()["movies"]))
 
-        rec = self.client.get("/recommend/19995", params={"limit": 5})
-        self.assertEqual(rec.status_code, 200)
-        payload = rec.json()
-        self.assertEqual(payload["movie"]["title"], "Avatar")
-        self.assertEqual(len(payload["recommendations"]), 5)
+            rec = self.client.get("/recommend/19995", params={"limit": 5})
+            self.assertEqual(rec.status_code, 200)
+            payload = rec.json()
+            self.assertEqual(payload["movie"]["title"], "Avatar")
+            self.assertEqual(len(payload["recommendations"]), 5)
 
-        missing = self.client.get("/recommend/99999999")
-        self.assertEqual(missing.status_code, 404)
+            missing = self.client.get("/recommend/99999999")
+            self.assertEqual(missing.status_code, 404)
 
     def test_streamlit_app_renders_and_recommends(self) -> None:
-        at = AppTest.from_file(str(ROOT / "app.py")).run(timeout=15)
-        self.assertFalse(at.exception, f"App raised exception on load: {at.exception}")
-        at.button[0].click().run(timeout=15)
-        self.assertFalse(at.exception, f"App raised exception on Recommend: {at.exception}")
-        self.assertGreaterEqual(len(at.subheader), 1)
+        with patch.dict(os.environ, {"OMDB_API_KEY": "", "TMDB_API_KEY": ""}):
+            at = AppTest.from_file(str(ROOT / "app.py")).run(timeout=15)
+            self.assertFalse(at.exception, f"App raised exception on load: {at.exception}")
+            at.button[0].click().run(timeout=15)
+            self.assertFalse(at.exception, f"App raised exception on Recommend: {at.exception}")
+            self.assertGreaterEqual(len(at.subheader), 1)
 
 
 if __name__ == "__main__":
