@@ -71,6 +71,50 @@
       </div>
       <div id="resultsGrid" class="movie-grid"></div>
     </section>
+
+    <section class="chat-panel" aria-label="Conversational movie assistant">
+      <div class="chat-header">
+        <div>
+          <h2>Ask CineMatch AI</h2>
+          <p class="subtitle">Describe a mood, mix genres, or set rules like &ldquo;no horror&rdquo;.</p>
+        </div>
+        <button id="newChatBtn" class="btn-ghost" type="button">New chat</button>
+      </div>
+
+      <div id="memoryStrip" class="memory-strip">
+        <span class="memory-label">What I remember about you:</span>
+        <div id="memoryTags" class="memory-tags">
+          <span class="memory-empty">No preferences saved yet — start chatting!</span>
+        </div>
+      </div>
+
+      <div id="chatMessages" class="chat-messages">
+        <div class="chat-msg assistant">
+          <p class="chat-text">Tell me what kind of movie you're in the mood for, and I'll pick matches from the 4,800-movie catalogue.</p>
+        </div>
+      </div>
+
+      <div id="chatError" class="alert hidden"></div>
+
+      <div class="quick-picks chat-starters">
+        <span class="quick-label">Examples:</span>
+        <button class="chip chat-starter" type="button">Something like Inception but lighter</button>
+        <button class="chip chat-starter" type="button">A heist movie with an emotional core, nothing violent</button>
+        <button class="chip chat-starter" type="button">Cozy sci-fi mystery, no horror</button>
+      </div>
+
+      <form id="chatForm" class="chat-form">
+        <label for="chatInput" class="sr-only">Chat with CineMatch AI</label>
+        <input
+          id="chatInput"
+          type="text"
+          maxlength="1000"
+          placeholder="Ask for a mood, similar movie, or constraint (max 1000 chars)…"
+          autocomplete="off"
+        />
+        <button id="chatSendBtn" class="btn-primary" type="submit">Send</button>
+      </form>
+    </section>
   </main>
 
   <footer class="site-footer container">

@@ -25,9 +25,38 @@
   const resultsGrid = document.getElementById("resultsGrid");
   const apiStatus = document.getElementById("apiStatus");
   const apiStatusText = document.getElementById("apiStatusText");
+  const memoryTags = document.getElementById("memoryTags");
+  const chatMessages = document.getElementById("chatMessages");
+  const chatError = document.getElementById("chatError");
+  const chatForm = document.getElementById("chatForm");
+  const chatInput = document.getElementById("chatInput");
+  const chatSendBtn = document.getElementById("chatSendBtn");
+  const newChatBtn = document.getElementById("newChatBtn");
 
   let selectedMovieId = 19995;
   let searchTimer = null;
+  let chatSessionId = loadSessionId();
+
+  function loadSessionId() {
+    try {
+      return localStorage.getItem("cineMatchSessionId") || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveSessionId(id) {
+    chatSessionId = id;
+    try {
+      if (id) {
+        localStorage.setItem("cineMatchSessionId", id);
+      } else {
+        localStorage.removeItem("cineMatchSessionId");
+      }
+    } catch {
+      // Ignore storage errors in private browsing or restricted contexts
+    }
+  }
 
   function escapeHtml(text) {
     const div = document.createElement("div");
@@ -241,7 +270,147 @@
     loadRecommendations(selectedMovieId);
   });
 
-  document.querySelectorAll(".chip").forEach((chip) => {
+  function showChatError(message) {
+    if (!message) {
+      chatError.classList.add("hidden");
+      chatError.textContent = "";
+      return;
+    }
+    chatError.textContent = message;
+    chatError.classList.remove("hidden");
+  }
+
+  function renderPreferences(prefs) {
+    if (!memoryTags) return;
+    const pills = [];
+    const addPills = (items, prefix, cls = "") => {
+      for (const item of items || []) {
+        pills.push(`<span class="memory-pill ${cls}">${escapeHtml(prefix)}: ${escapeHtml(item)}</span>`);
+      }
+    };
+    addPills(prefs && prefs.liked_genres, "Likes");
+    addPills(prefs && prefs.liked_movies, "Loved");
+    addPills(prefs && prefs.disliked_genres, "Avoid", "avoid");
+    addPills(prefs && prefs.constraints, "Rule", "avoid");
+
+    if (!pills.length) {
+      memoryTags.innerHTML = '<span class="memory-empty">No preferences saved yet — start chatting!</span>';
+      return;
+    }
+    memoryTags.innerHTML = pills.join("");
+  }
+
+  function appendChatMessage(role, text, picks = [], followUp = null) {
+    const wrapper = document.createElement("div");
+    wrapper.className = `chat-msg ${role}`;
+    let html = `<p class="chat-text">${escapeHtml(text)}</p>`;
+
+    if (picks && picks.length) {
+      html += '<div class="chat-picks">';
+      for (const pick of picks) {
+        html += `
+          <div class="chat-pick-card">
+            <div class="chat-pick-title">${escapeHtml(pick.title)}</div>
+            <p class="chat-pick-reason">${escapeHtml(pick.reason)}</p>
+            <button class="btn-ghost pick-explore-btn" type="button" data-movie-id="${escapeHtml(pick.movie_id)}" data-title="${escapeHtml(pick.title)}">
+              Explore similar
+            </button>
+          </div>
+        `;
+      }
+      html += "</div>";
+    }
+
+    if (followUp) {
+      html += `<p class="chat-followup">${escapeHtml(followUp)}</p>`;
+    }
+
+    wrapper.innerHTML = html;
+    wrapper.querySelectorAll(".pick-explore-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mid = Number(btn.dataset.movieId);
+        selectedMovieId = mid;
+        searchInput.value = btn.dataset.title || "";
+        loadRecommendations(mid);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    });
+
+    chatMessages.appendChild(wrapper);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return wrapper;
+  }
+
+  async function loadStoredPreferences() {
+    if (!chatSessionId) return;
+    try {
+      const res = await fetch(`${API_BASE}/chat/${encodeURIComponent(chatSessionId)}/preferences`);
+      if (res.status === 404) {
+        saveSessionId(null);
+        renderPreferences(null);
+        return;
+      }
+      if (!res.ok) return;
+      const data = await res.json();
+      renderPreferences(data.preferences);
+    } catch {
+      // Ignore silent background preference check errors
+    }
+  }
+
+  async function sendChatMessage(rawText) {
+    const message = rawText.trim();
+    if (!message) return;
+
+    showChatError("");
+    appendChatMessage("user", message);
+    chatInput.value = "";
+    chatSendBtn.disabled = true;
+    chatSendBtn.textContent = "Thinking…";
+    const loadingEl = appendChatMessage("assistant loading", "Searching catalogue and picking movies…");
+
+    try {
+      const payload = { message };
+      if (chatSessionId) payload.session_id = chatSessionId;
+
+      const res = await fetch(`${API_BASE}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || `Chat API returned HTTP ${res.status}`);
+      }
+
+      if (data.session_id) {
+        saveSessionId(data.session_id);
+      }
+      loadingEl.remove();
+      const reply = data.reply || {};
+      appendChatMessage(
+        "assistant",
+        reply.message || "Here are my recommendations.",
+        reply.picks || [],
+        reply.follow_up_question || null
+      );
+      if (data.preferences) {
+        renderPreferences(data.preferences);
+      }
+    } catch (err) {
+      loadingEl.remove();
+      showChatError(
+        err && err.message
+          ? `Chat failed: ${err.message}`
+          : "Chat request failed. Check that the backend and LLM_API_KEY are configured."
+      );
+    } finally {
+      chatSendBtn.disabled = false;
+      chatSendBtn.textContent = "Send";
+    }
+  }
+
+  document.querySelectorAll(".chip[data-movie-id]").forEach((chip) => {
     chip.addEventListener("click", () => {
       selectedMovieId = Number(chip.dataset.movieId);
       searchInput.value = chip.textContent.trim();
@@ -250,7 +419,31 @@
     });
   });
 
+  document.querySelectorAll(".chat-starter").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      sendChatMessage(btn.textContent.trim());
+    });
+  });
+
+  if (chatForm) {
+    chatForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      sendChatMessage(chatInput.value);
+    });
+  }
+
+  if (newChatBtn) {
+    newChatBtn.addEventListener("click", () => {
+      saveSessionId(null);
+      renderPreferences(null);
+      showChatError("");
+      chatMessages.innerHTML =
+        '<div class="chat-msg assistant"><p class="chat-text">Started a fresh chat session. What kind of movie are you looking for?</p></div>';
+    });
+  }
+
   checkHealth();
+  loadStoredPreferences();
   searchInput.value = "Avatar";
   loadRecommendations(selectedMovieId);
 })();
