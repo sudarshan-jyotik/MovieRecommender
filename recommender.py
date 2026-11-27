@@ -25,6 +25,24 @@ OMDB_API_BASE = "https://www.omdbapi.com/"
 _HTTP_SESSION = requests.Session()
 
 
+def load_dotenv_file(env_path: Path = ROOT_DIR / ".env") -> None:
+    """Load key=value pairs from .env without overriding existing environment variables."""
+    if not env_path.is_file():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+load_dotenv_file()
+
+
 @dataclass(frozen=True)
 class MovieMetadata:
     """Metadata fetched from TMDB/OMDb merged with offline dataset defaults."""

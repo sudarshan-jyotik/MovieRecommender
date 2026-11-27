@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -17,6 +19,7 @@ from recommender import (
     fetch_movie_metadata,
     fetch_omdb_metadata,
     fetch_tmdb_metadata,
+    load_dotenv_file,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -138,6 +141,20 @@ class TestMovieRecommender(unittest.TestCase):
         na_session.get.return_value = na_resp
         meta_na = fetch_omdb_metadata(19995, "Avatar", "2009", api_key="omdb-key", session=na_session)
         self.assertIsNone(meta_na.poster_url)
+
+    def test_load_dotenv_does_not_override_existing_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("# comment\nTEST_MOVIE_ENV_A=from_file\nTEST_MOVIE_ENV_B=from_file\n", encoding="utf-8")
+            os.environ["TEST_MOVIE_ENV_B"] = "from_os"
+            os.environ.pop("TEST_MOVIE_ENV_A", None)
+            try:
+                load_dotenv_file(env_file)
+                self.assertEqual(os.environ.get("TEST_MOVIE_ENV_A"), "from_file")
+                self.assertEqual(os.environ.get("TEST_MOVIE_ENV_B"), "from_os")
+            finally:
+                os.environ.pop("TEST_MOVIE_ENV_A", None)
+                os.environ.pop("TEST_MOVIE_ENV_B", None)
 
     def test_fastapi_endpoints(self) -> None:
         health = self.client.get("/health")
